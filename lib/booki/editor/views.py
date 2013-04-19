@@ -18,7 +18,7 @@ from django.shortcuts import render_to_response
 from django.core.paginator import Paginator, InvalidPage, EmptyPage
 from django.contrib.auth.decorators import login_required
 from django.conf import settings
-from django.http import Http404, HttpResponse,HttpResponseRedirect
+from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django import forms
 from django.contrib.auth.models import User
 from django.db import transaction
@@ -114,10 +114,8 @@ def edit_book(request, bookid, version=None):
     chapters = models.Chapter.objects.filter(version=book_version)
 
     tabs = ["chapters"]
-
-    if True: # bookSecurity.isAdmin():
-        tabs += ["attachments"]
-
+    tabs += ["attachments"]
+    tabs += ["covers"]
     tabs += ["history", "versions", "notes"]
 
     if bookSecurity.isAdmin():
@@ -265,6 +263,173 @@ def upload_attachment(request, bookid, version=None):
         return HttpResponse('<html><body><script> parent.jQuery.booki.editor.showAttachmentsTab(); parent.jQuery("#tabattachments FORM")[0].reset(); </script></body></html>')
     else:
         return HttpResponse('<html><body><script> parent.jQuery.booki.editor.showAttachmentsTab(); parent.jQuery("#tabattachments FORM")[0].reset(); alert(parent.jQuery.booki._("errorupload", "Error while uploading file!"));</script></body></html>')
+
+
+def view_cover(request, bookid, cid, fname = None, version=None):
+    from django.views import static
+
+    try:
+        book = models.Book.objects.get(url_title__iexact=bookid)
+    except models.Book.DoesNotExist:
+        return pages.ErrorPage(request, "errors/book_does_not_exist.html", {"book_name": bookid})
+
+    try:
+        cover = models.BookCover.objects.get(cid = cid)
+    except models.BookCover.DoesNotExist:
+        return HttpResponse(status=500)
+
+    document_path = '%s/book_covers/%s' % (settings.DATA_ROOT, cover.id)
+    # extenstion
+
+    import mimetypes
+    mimetypes.init()
+
+    extension = cover.filename.split('.')[-1].lower()
+
+    if extension == 'tif':
+        extension = 'tiff'
+
+    if extension == 'jpg':
+        extension = 'jpeg'
+
+    content_type = mimetypes.types_map.get('.'+extension, 'binary/octet-stream')
+
+    if request.GET.get('preview', '') == '1':
+        import Image
+        try:
+            if extension.lower() in ['pdf', 'psd', 'svg']:
+                raise
+
+            im = Image.open(cover.attachment.name)
+            im.thumbnail((250, 250), Image.ANTIALIAS)
+        except:
+            try:
+                im = Image.open('%s/images/booktype-cover-%s.png' % (settings.SITE_STATIC_ROOT, extension.lower()))
+                extension = 'png'
+                content_type = 'image/png'
+            except:
+                # Not just IOError but anything else
+                im = Image.open('%s/images/booktype-cover-error.png' % settings.SITE_STATIC_ROOT)
+                extension = 'png'
+                content_type = 'image/png'
+
+        response = HttpResponse(content_type=content_type)
+
+        if extension.lower() in ['jpg', 'jpeg', 'png', 'gif', 'tiff', 'bmp', 'tif']:
+            if extension.upper() == 'JPG': extension = 'JPEG'
+        else:
+            extension = 'jpeg'
+
+        im.save(response, extension.upper())
+        
+        return response
+
+    try:
+        data = open(document_path, 'rb').read()
+    except IOError:
+        return HttpResponse(status=500)
+                
+    response = HttpResponse(data, content_type=content_type)
+    return response
+
+
+
+@transaction.commit_manually
+def upload_cover(request, bookid, version=None):
+    """
+    Uploades attachments. Used from Upload dialog.
+
+    @param request: Django Request
+    @param bookid: Book ID
+    @param version: Book version or None
+    """
+
+    import datetime
+
+    try:
+        book = models.Book.objects.get(url_title__iexact=bookid)
+    except models.Book.DoesNotExist:
+        return pages.ErrorPage(request, "errors/book_does_not_exist.html", {"book_name": bookid})
+
+    book_version = book.getVersion(version)
+
+    stat = models.BookStatus.objects.filter(book = book)[0]
+    
+    operationResult = True
+
+    # check this for transactions
+    try:
+
+        for name, fileData in request.FILES.items():
+            if True:
+                print '>> ', name
+                print request.FILES[name].name
+                import hashlib
+
+                h = hashlib.sha1()
+                h.update(name)
+                h.update(request.POST.get('format', ''))
+                h.update(request.POST.get('license', ''))
+                h.update(str(datetime.datetime.now()))
+
+                license = models.License.objects.get(name=request.POST.get('license', ''))
+
+                frm = request.POST.get('format', '').split(',')
+
+                try:
+                    width = int(request.POST.get('width', '0'))
+                except ValueError:
+                    width = 0
+
+                try:
+                    height = int(request.POST.get('height', '0'))
+                except ValueError:
+                    height = 0
+
+                try:
+                    filename = request.FILES[name].name
+                except:
+                    filename = ''
+                
+                cov = models.BookCover(book = book,
+                                       user = request.user,
+                                       cid = h.hexdigest(),
+                                       title = request.POST.get('title', '')[:250],
+                                       filename = filename[:250],
+                                       width = width,
+                                       height = height,
+                                       unit = request.POST.get('unit', 'mm'),
+                                       booksize = request.POST.get('booksize', ''),
+                                       cover_type = request.POST.get('type', ''),
+                                       creator = request.POST.get('creator', '')[:40],
+                                       license = license,
+                                       notes = request.POST.get('notes', '')[:500],
+                                       approved = False,
+                                       is_book = 'book' in frm,
+                                       is_ebook = 'ebook' in frm,
+                                       is_pdf = 'pdf' in frm,
+                                       created = datetime.datetime.now())
+                cov.save()
+                
+                cov.attachment.save(request.FILES[name].name, fileData, save = False)
+                cov.save()
+
+        # TODO:
+        # must write info about this to log!
+    except IOError:
+        operationResult = False
+        transaction.rollback()
+    except:
+        from booki.utils import log
+        log.printStack()
+        oprerationResult = False
+        transaction.rollback()
+    else:
+        # maybe check file name now and save with new name
+        transaction.commit()
+
+    return HttpResponse('<html><body><script> parent.jQuery.booki.editor.showCovers(); </script></body></html>')
+
 
 def view_books_json(request):
     """

@@ -144,3 +144,28 @@ BODY {
 SPAN.bookicommentmarker {
   background-color: #ffffcc;
 }
+
+.optionunselected {
+    color: #808080;
+}
+
+#chapterrevision {
+    word-wrap: break-word;
+}
+
+#chapterrevision a {
+    word-wrap: break-word;
+}
+
+#fieldWrapper .bottomSpace {
+    padding-bottom: 50px;
+}
+
+#fieldWrapper .bottomSpaceSmall {
+    padding-bottom: 15px;
+}
+
+#cover_error {
+    display: none;
+    margin-bottom: 20px;
+}

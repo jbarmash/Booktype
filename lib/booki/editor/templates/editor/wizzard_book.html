@@ -5,6 +5,7 @@
   <div style="clear: both; margin-bottom: 5px; padding-bottom: 5px;"></div>
   <form name="wizzardbook" id="demoForm" method="post" action="#" onsubmit="return false;" class="bbq">
     <div id="fieldWrapper">
+
     <div class="step" id="format">
       <div class="input">
       <fieldset>
@@ -139,8 +140,69 @@
         </fieldset>
       </div>
     </div>
-    <div id="paragraphs" class="step">
+
+
+    <script type="text/javascript">
+      jQuery(document).ready(function() {
+          $("#cover_image").click(function(){
+              var sel = $("#cover_image").val();
+              console.debug(sel);
+          });
+      });
+    </script>
+    
+    <div id="Cover_Advanced" class="step">
       <div class="input">
+        <fieldset>
+	  <legend>{% trans "Cover" %}</legend>
+          <dl>
+            <dt><label for="cover_image">{% trans "Select cover image" %}</label></dt>
+	    <dd><select name="cover_image" id="cover_image" multiple="multiple" size="10">
+  		<option value=" ">{% trans "No Cover" %}</option>
+		<option disabled="disabled" role="separator">-------------------</option>
+
+                {% for cover in covers %}
+		  {% if cover.cid == "front" %}
+		      <option disabled="disabled"> {% trans "Front Cover" %} </option>
+		  {% else %}
+                     {% if cover.cid == "spine" %}
+		          <option disabled="disabled"> {% trans "Spine" %} </option>
+                     {% else %}
+                         {% if cover.cid == "back" %}
+  		              <option disabled="disabled"> {% trans "Back Cover" %} </option>
+                         {% else %}
+                              {% if cover.cid == "whole" %}
+       		                  <option disabled="disabled"> {% trans "Full Cover" %} </option>
+                              {% else %}
+                                  {% if cover.cid == "other" %}
+           		                  <option disabled="disabled"> {% trans "Others" %} </option>
+                                  {% else %}
+                                          <option value="{{ cover.cid }}">  
+                                              {% if cover.title|length > 50 %}
+                                                 {{ cover.title|default:cover.filename|slice:"50" }}...  
+                                              {% else %}
+                                                 {{ cover.title|default:cover.filename }} 
+                                              {% endif %}
+                                              {% if cover.is_book %} ({% trans "BOOK" %}) {% endif %}
+                                              {% if cover.is_pdf %} ({% trans "PDF" %}) {% endif %}
+                                              {% if cover.is_ebook %} ({% trans "E-BOOK" %}) {% endif %}
+                                          </option>
+                                  {% endif %}
+                              {% endif %}
+                         {% endif %}
+		     {% endif %} 
+                  {% endif %}
+                {% endfor %}
+
+            </select></dd>
+          </dl> 
+          <p style="max-width: 450px;">{% trans "Tip: To select multiple cover files for your book (front, spine, back) please press the Control key (Ctrl)." %}</p>
+        </fieldset>       
+      </div>
+    </div>
+
+    <div id="paragraphs" class="step">
+      <div class="input bottomSpace">
       <fieldset>
       <legend>{% trans "Page breaks" %}</legend>
         <dl>

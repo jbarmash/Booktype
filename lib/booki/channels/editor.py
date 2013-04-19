@@ -1194,11 +1194,6 @@ def remote_publish_book(request, message, bookid, version):
     Input:
      - publish_mode
      - is_archive
-     - is_lulu
-     - lulu_user
-     - lulu_password
-     - lulu_api_key
-     - lulu_project
      - book
      - project
      - mode
@@ -1271,16 +1266,6 @@ def remote_publish_book(request, message, bookid, version):
                     args[name] = message.get(name)
         elif default:
             args[name] = default
-
-    if message.get("is_lulu", False):
-        args["to_lulu"] = "yes"
-        _isSet("lulu_user", settings.LULU_USER)
-        _isSet("lulu_password", settings.LULU_PASSWORD)
-
-        if settings.LULU_API_KEY:
-            args["lulu_api_key"] = settings.LULU_API_KEY
-
-        _isSet("lulu_project")
 
     _isSet('title')
     _isSet('license')
@@ -1738,10 +1723,13 @@ def remote_unlock_chapter(request, message, bookid, version):
 
     import re
 
-    if request.user.username == 'booki':
+    book = models.Book.objects.get(id=bookid)
+
+    bookSecurity = security.getUserSecurityForBook(request.user, book)
+
+    if bookSecurity.isAdmin():
         for key in sputnik.rkeys("booki:%s:locks:%s:*" % (bookid, message["chapterID"])):
             m = re.match("booki:(\d+):locks:(\d+):(\w+)", key)
-
             if m:
                 sputnik.set("booki:%s:killlocks:%s:%s" % (bookid, message["chapterID"], m.group(3)), 1)
 
@@ -2214,6 +2202,297 @@ def remote_chapter_diff_parallel(request, message, bookid, version):
     return {"output": info+'<table border="0" width="100%%"><tr><td width="50%%"><div style="border-bottom: 1px solid #c0c0c0; font-weight: bold;">Revision: '+message["revision1"]+'</div></td><td width="50%%"><div style="border-bottom: 1px solid #c0c0c0; font-weight: bold">Revision: '+message["revision2"]+'</div></td></tr>\n'.join(output)+'</table>\n'}
 
 
+def remote_covers_data(request, message, bookid, version):
+    """
+    Get info about covers.
+
+
+    @type request: C{django.http.HttpRequest}
+    @param request: Client Request object
+    @type message: C{dict}
+    @param message: Message object
+    @type bookid: C{string}
+    @param bookid: Unique Book id
+    @type version: C{string}
+    @param version: Book version
+    @rtype: C{dict}
+    @return: Returns needed data for Cover Manager tab
+    """
+
+    book = models.Book.objects.get(id=bookid)
+    book_ver = book.getVersion(version)
+
+    bookSecurity = security.getUserSecurityForBook(request.user, book)
+    
+    covers = []
+
+    for cover in models.BookCover.objects.filter(book = book).order_by("title"):
+        frm = []
+        
+        if cover.is_book:
+            frm.append("book")
+            
+        if cover.is_ebook:
+            frm.append("ebook")
+
+        if cover.is_pdf:
+            frm.append("pdf")
+
+        title = cover.title.strip() or cover.filename
+
+        if len(title) > 50:
+            title = title[:50] + '...'
+
+        covers.append({'cid': cover.cid,
+                       'placement': cover.cover_type,
+                       'format': frm,
+                       'title': title,
+                       'approved': cover.approved})
+
+    transaction.commit()
+    covers.reverse()
+
+    return {"covers": covers, "can_update": bookSecurity.isAdmin()}
+
+
+def remote_cover_approve(request, message, bookid, version):
+    """
+    Set cover approve status.
+
+
+    @type request: C{django.http.HttpRequest}
+    @param request: Client Request object
+    @type message: C{dict}
+    @param message: Message object
+    @type bookid: C{string}
+    @param bookid: Unique Book id
+    @type version: C{string}
+    @param version: Book version
+    @rtype: C{dict}
+    @return: Returns needed data for Cover Manager tab
+    """
+
+    book = models.Book.objects.get(id=bookid)
+    bookSecurity = security.getUserSecurityForBook(request.user, book)
+
+    if not bookSecurity.isAdmin():
+        transaction.rollback()
+        return {"result": False}
+
+    try:
+        cover =  models.BookCover.objects.get(book = book, cid = message.get('cid', ''))
+        cover.approved = message.get('cover_status', False)
+        cover.save()
+    except models.BookCover.DoesNotExist:
+
+        transaction.rollback()
+        return {"result": False}
+    else:
+        transaction.commit()
+
+    return {"result": True}
+
+
+def remote_cover_delete(request, message, bookid, version):
+    """
+    Set cover approve status.
+
+
+    @type request: C{django.http.HttpRequest}
+    @param request: Client Request object
+    @type message: C{dict}
+    @param message: Message object
+    @type bookid: C{string}
+    @param bookid: Unique Book id
+    @type version: C{string}
+    @param version: Book version
+    @rtype: C{dict}
+    @return: Returns needed data for Cover Manager tab
+    """
+
+    book = models.Book.objects.get(id=bookid)
+
+    try:
+        cover =  models.BookCover.objects.get(book = book, cid = message.get('cid', ''))
+
+        filename = cover.attachment.name[:]
+
+        cover.delete()
+    except models.BookCover.DoesNotExist:
+
+        transaction.rollback()
+        return {"result": False}
+    else:
+        transaction.commit()
+
+    try:
+        import os
+
+        os.remove(cover.attachment.name)
+    except OSError:
+        pass
+
+    return {"result": True}
+
+
+def remote_cover_save(request, message, bookid, version):
+    """
+    Update cover data.
+
+
+    @type request: C{django.http.HttpRequest}
+    @param request: Client Request object
+    @type message: C{dict}
+    @param message: Message object
+    @type bookid: C{string}
+    @param bookid: Unique Book id
+    @type version: C{string}
+    @param version: Book version
+    @rtype: C{dict}
+    @return: Returns needed data for Cover Manager tab
+    """
+
+    book = models.Book.objects.get(id=bookid)
+
+    try:
+        cover =  models.BookCover.objects.get(book = book, cid = message.get('cid', ''))
+        cover.title =  message.get('title', '').strip()[:250]
+
+        try:
+            width = int(message.get('width', 0))
+        except ValueError:
+            width = 0
+            
+        try:
+            height = int(message.get('height', 0))
+        except ValueError:
+            height = 0
+
+        cover.width = width
+        cover.height = height
+        cover.unit = message.get('units', 'mm')
+        cover.booksize = message.get('booksize', '')
+
+        license = models.License.objects.get(abbrevation=message.get('license', ''))
+        
+        cover.license = license
+        cover.notes = message.get('notes', '')[:500]
+
+        frm = message.get('format', '').split(',')
+        cover.is_book = "book" in frm
+        cover.is_ebook = "ebook" in frm
+        cover.is_pdf = "pdf" in frm
+
+        cover.creator = message.get('creator', '')[:40]
+        cover.cover_type = message.get('cover_type', '')
+
+        cover.save()
+    except models.BookCover.DoesNotExist:
+        transaction.rollback()
+        return {"result": False}
+    else:
+        transaction.commit()
+
+    return {"result": True}
+
+
+def remote_cover_upload(request, message, bookid, version):
+    """
+    Get info about specific cover.
+
+
+    @type request: C{django.http.HttpRequest}
+    @param request: Client Request object
+    @type message: C{dict}
+    @param message: Message object
+    @type bookid: C{string}
+    @param bookid: Unique Book id
+    @type version: C{string}
+    @param version: Book version
+    @rtype: C{dict}
+    @return: Returns needed data for Cover panel.
+    """
+
+    licenses =  [(elem.abbrevation, elem.name) for elem in models.License.objects.all().order_by("name")]
+
+    transaction.commit()
+
+    return {"licenses": licenses}
+
+
+def remote_cover_load(request, message, bookid, version):
+    """
+    Get info about specific cover.
+
+
+    @type request: C{django.http.HttpRequest}
+    @param request: Client Request object
+    @type message: C{dict}
+    @param message: Message object
+    @type bookid: C{string}
+    @param bookid: Unique Book id
+    @type version: C{string}
+    @param version: Book version
+    @rtype: C{dict}
+    @return: Returns needed data for Cover panel.
+    """
+
+    book = models.Book.objects.get(id=bookid)
+
+    cover = models.BookCover.objects.get(book=book, cid=message.get('cid', ''))
+
+    # TODO 
+    # - placement
+    # - filename
+
+    frm = []
+
+    if cover.is_book:
+        frm.append("book")
+
+    if cover.is_ebook:
+        frm.append("ebook")
+
+    if cover.is_pdf:
+        frm.append("pdf")
+
+    import Image
+
+    size = (0, 0)
+    filetype = ""
+
+    try:
+        im = Image.open(cover.attachment.name)
+        size = im.size
+
+        filetype = cover.filename.split('.')[-1].upper()
+    except:
+        pass
+
+    # temporary data
+    cover = {"cid": cover.cid,
+             "filename": cover.filename,
+             "cover_type": cover.cover_type,
+             "format": frm,
+             "width": cover.width,
+             "filetype": filetype,
+             "img_size": size,
+             "height": cover.height,
+             "units": cover.unit, 
+             "booksize": cover.booksize,
+             "title": cover.title,
+             "type": cover.cover_type,
+             "creator": cover.creator,
+             "notes": cover.notes,
+             "license": cover.license.abbrevation,
+             "approved": cover.approved}
+
+    licenses =  [(elem.abbrevation, elem.name) for elem in models.License.objects.all().order_by("name")]
+
+    transaction.commit()
+
+    return {"cover": cover, "licenses": licenses}
+
 
 def remote_settings_options(request, message, bookid, version):
     """
@@ -2251,7 +2530,7 @@ def remote_settings_options(request, message, bookid, version):
     # get rtl
     try:
         rtl = models.Info.objects.get(book=book, name='{http://booki.cc/}dir', kind=0).getValue()
-    except models.Info.DoesNotExist:
+    except (models.Info.DoesNotExist, models.Info.MultipleObjectsReturned):
         rtl = "LTR"
 
     transaction.commit()
@@ -2830,9 +3109,9 @@ def remote_book_permission_save(request, message, bookid, version):
 PUBLISH_OPTIONS = {
     'book': [{"name": "booksize", "value": "COMICBOOK"}, {"name": "custom_width", "value": ""}, {"name": "custom_height", "value": ""}, {"name": "body_font-family", "value": "Fontin_Sans"}, {"name": "body_font-size", "value": "10"}, {"name": "h1_font-family", "value": "Fontin_Sans"}, {"name": "h1_font-size", "value": "14"}, {"name": "h1_text-transform", "value": "uppercase"}, {"name": "h1_font-weight", "value": "heavy"}, {"name": "h2_font-family", "value": "Fontin_Sans"}, {"name": "h2_font-size", "value": "12"}, {"name": "h2_text-transform", "value": "uppercase"}, {"name": "h2_font-weight", "value": "heavy"}, {"name": "h3_font-family", "value": "Fontin_Sans"}, {"name": "h3_font-size", "value": "10"}, {"name": "h3_text-transform", "value": "uppercase"}, {"name": "h3_font-weight", "value": "heavy"}, {"name": "pre_font-family", "value": "Courier"}, {"name": "pre_font-size", "value": "10"}, {"name": "p_pagebreak", "value": "on"}, {"name": "footnotes_pagebreak", "value": "on"}, {"name": "control-css", "value": "on"}, {"name": "page-numbers", "value": "auto"}, {"name": "embed-fonts", "value": "on"}, {"name": "toc_header", "value": ""}, {"name": "top_margin", "value": ""}, {"name": "side_margin", "value": ""}, {"name": "bottom_margin", "value": ""}, {"name": "gutter", "value": ""}, {"name": "columns", "value": ""}, {"name": "column_margin", "value": ""}, {"name": "additional_css", "value": ""}, {"name": "special_css", "value": ""}, {"name": "grey_scale", "value": "off"}, {"name": "rotate", "value": "off"}, {"name": "allow-breaks", "value": "off"}, {"name": "custom_override", "value": "off"}, {"name": "", "value": "off"}, {"name": "", "value": "off"}],
 
-    'ebook': [{"name": "body_font-family", "value": "Fontin_Sans"}, {"name": "body_font-size", "value": "10"}, {"name": "h1_font-family", "value": "Fontin_Sans"}, {"name": "h1_font-size", "value": "14"}, {"name": "h1_text-transform", "value": "uppercase"}, {"name": "h1_font-weight", "value": "heavy"}, {"name": "h2_font-weightamily", "value": "Fontin_Sans"}, {"name": "h2_font-size", "value": "12"}, {"name": "h2_text-transform", "value": "uppercase"}, {"name": "h2_font-weight", "value": "heavy"}, {"name": "h3_font-family", "value": "Fontin_Sans"}, {"name": "h3_font-size", "value": "10"}, {"name": "h3_text-transform", "value": "uppercase"}, {"name": "h3_font-weight", "value": "heavy"}, {"name": "pre_font-family", "value": "Courier"}, {"name": "pre_font-size", "value": "10"}, {"name": "additional_css", "value": ""}, {"name": "special_css", "value": ""}, {"name": "ebook_format", "value": "epub"},  {"name": "custom_override", "value": "off"}, {"name": "", "value": "off"}, {"name": "", "value": "off"}],
+    'bookjs': [{"name": "booksize", "value": "COMICBOOK"}, {"name": "custom_width", "value": ""}, {"name": "custom_height", "value": ""}, {"name": "body_font-family", "value": "Liberation Serif"}, {"name": "body_font-size", "value": "18"}, {"name": "h1_font-family", "value": "Liberation Serif"}, {"name": "h1_font-size", "value": "24"}, {"name": "h1_text-transform", "value": "uppercase"}, {"name": "h1_font-weight", "value": "heavy"}, {"name": "h2_font-family", "value": "Liberation Serif"}, {"name": "h2_font-size", "value": "24"}, {"name": "h2_text-transform", "value": "uppercase"}, {"name": "h2_font-weight", "value": "heavy"}, {"name": "h3_font-family", "value": "Liberation Serif"}, {"name": "h3_font-size", "value": "20"}, {"name": "h3_text-transform", "value": "uppercase"}, {"name": "h3_font-weight", "value": "heavy"}, {"name": "pre_font-family", "value": "Courier"}, {"name": "pre_font-size", "value": "10"}, {"name": "p_pagebreak", "value": "on"}, {"name": "footnotes_pagebreak", "value": "on"}, {"name": "control-css", "value": "on"}, {"name": "page-numbers", "value": "auto"}, {"name": "embed-fonts", "value": "on"}, {"name": "toc_header", "value": ""}, {"name": "top_margin", "value": ""}, {"name": "side_margin", "value": ""}, {"name": "bottom_margin", "value": ""}, {"name": "gutter", "value": ""}, {"name": "columns", "value": ""}, {"name": "column_margin", "value": ""}, {"name": "additional_css", "value": ""}, {"name": "special_css", "value": ""}, {"name": "grey_scale", "value": "off"}, {"name": "rotate", "value": "off"}, {"name": "allow-breaks", "value": "off"}, {"name": "custom_override", "value": "off"}, {"name": "", "value": "off"}, {"name": "", "value": "off"}],
 
-    'lulu': [{"name": "lulu_user", "value": ""}, {"name": "lulu_password", "value": ""}, {"name": "lulu_title", "value": ""}, {"name": "description", "value": ""}, {"name": "authors", "value": ""}, {"name": "lulu_download_price", "value": ""}, {"name": "lulu_print_price", "value": ""}, {"name": "lulu_currency_code", "value": "EUR"}, {"name": "pagesize", "value": "COMICBOOK"}, {"name": "body_font-family", "value": "Fontin_Sans"}, {"name": "body_font-size", "value": "10"}, {"name": "heading_font", "value": "Fontin_Sans"}, {"name": "h1_font-size", "value": "14"}, {"name": "h1_text-transform", "value": "uppercase"}, {"name": "h1_fontweight", "value": "heavy"}, {"name": "h2_font-family", "value": "Fontin_Sans"}, {"name": "h2_font-size", "value": "12"}, {"name": "h2_text-transform", "value": "uppercase"}, {"name": "h2_font-weight", "value": "heavy"}, {"name": "h3_font-family", "value": "Fontin_Sans"}, {"name": "h3_font-size", "value": "10"}, {"name": "h3_texttransform", "value": "uppercase"}, {"name": "h3_font-weight", "value": "heavy"}, {"name": "pre_font-family", "value": "Courier"}, {"name": "pre_font-size", "value": "10"}, {"name": "p_pagebreak", "value": "on"}, {"name": "footnotes_pagebreak", "value": "on"}, {"name": "additional_css", "value": ""}, {"name": "special_css", "value": " "}, {"name": "custom_override", "value": "off"}, {"name": "", "value": "off"}, {"name": "", "value": "off"}],
+    'ebook': [{"name": "body_font-family", "value": "Fontin_Sans"}, {"name": "body_font-size", "value": "10"}, {"name": "h1_font-family", "value": "Fontin_Sans"}, {"name": "h1_font-size", "value": "14"}, {"name": "h1_text-transform", "value": "uppercase"}, {"name": "h1_font-weight", "value": "heavy"}, {"name": "h2_font-weightamily", "value": "Fontin_Sans"}, {"name": "h2_font-size", "value": "12"}, {"name": "h2_text-transform", "value": "uppercase"}, {"name": "h2_font-weight", "value": "heavy"}, {"name": "h3_font-family", "value": "Fontin_Sans"}, {"name": "h3_font-size", "value": "10"}, {"name": "h3_text-transform", "value": "uppercase"}, {"name": "h3_font-weight", "value": "heavy"}, {"name": "pre_font-family", "value": "Courier"}, {"name": "pre_font-size", "value": "10"}, {"name": "additional_css", "value": ""}, {"name": "special_css", "value": ""}, {"name": "ebook_format", "value": "epub"},  {"name": "custom_override", "value": "off"}, {"name": "", "value": "off"}, {"name": "", "value": "off"}],
 
     'odt': [{"name": "body_font-weight", "value": "Fontin_Sans"}, {"name": "body_font-size", "value": "10"}, {"name": "h1_font-weight", "value": "Fontin_Sans"}, {"name": "h1_font-size", "value": "14"}, {"name": "h1_text-transform", "value": "uppercase"}, {"name": "h1_font-weight", "value": "heavy"}, {"name": "h2_font-weight", "value": "Fontin_Sans"}, {"name": "h2_font-size", "value": "12"}, {"name": "h2_text-transform", "value": "uppercase"}, {"name": "h2_font-weight", "value": "heavy"}, {"name": "h3_font-weight", "value": "Fontin_Sans"}, {"name": "h3_font-size", "value": "10"}, {"name": "h3_text-transform", "value": "uppercase"}, {"name": "h3_font-weight", "value": "heavy"}, {"name": "pre_font-weight", "value": "Courier"}, {"name": "pre_font-size", "value": "10"}, {"name": "p_pagebreak", "value": "on"}, {"name": "footnotes_pagebreak", "value": "on"}, {"name": "additional_css", "value": ""}, {"name": "special_css", "value": ""}, {"name": "custom_override", "value": "off"}, {"name": "", "value": "off"}, {"name": "", "value": "off"}],
 
@@ -2864,14 +3143,93 @@ def remote_get_wizzard(request, message, bookid, version):
     import django.template.loader
     from django.template import Context
 
-    # book, ebook, pdf, odt, lulu
+    # book, ebook, pdf, odt
+
+    output_type = message.get('wizzard_type', '').upper()
 
     for op in options:
         if op.get('name', '') == 'special_css':
-            name = message.get('wizzard_type', '').upper()
-            op['value'] = config.getConfiguration('BOOKTYPE_CSS_%s' % name, '')
+            op['value'] = config.getConfiguration('BOOKTYPE_CSS_%s' % output_type, '')
 
-    c = Context({})
+    covers = []
+    
+    class DummyCover(object):
+        def __init__(self, title):
+            self.cid = title
+            
+    def _getCovers(coverType):
+        ls =  [cover for cover in models.BookCover.objects.filter(book=book, is_book=True, cover_type = coverType)]
+
+        if len(ls) > 0:
+            return [DummyCover(coverType)] + ls
+
+        return ls
+
+
+    def _getOtherCovers(coverType):
+        ls = []
+
+        for cover in models.BookCover.objects.filter(book=book):
+            if cover.is_book == True:
+                if cover.cover_type != 'digital':
+                    continue
+            ls.append(cover)
+
+        if len(ls) > 0:
+            return [DummyCover(coverType)] + ls
+
+        return ls
+
+    if output_type in ['BOOK', 'BOOKJS']:        
+        _front = _getCovers('front')
+        _back = _getCovers('back')
+        _spine = _getCovers('spine')
+        _whole = _getCovers('whole')
+        _other = _getOtherCovers('other')
+
+        covers = _front + _back + _spine + _whole + _other
+
+    if output_type in ['EBOOK', 'PDF', 'ODT']:
+        covers = []
+
+        for cover in models.BookCover.objects.filter(book=book):
+            title = cover.title or cover.filename
+            is_ok = False
+
+            for e in ['.jpg', 'jpe', '.jpeg', '.gif', '.png']:
+                if cover.filename.lower().endswith(e):
+                    is_ok = True
+
+            if not is_ok:
+                continue
+
+            if len(title) > 50:
+                title = title[:50]+'...'
+ 
+            _class = ''
+            if cover.is_book or cover.is_ebook or cover.is_pdf:
+                if cover.is_book:
+                    _class += ' coverbook' 
+                if cover.is_ebook:
+                    _class += ' coverebook'
+                if cover.is_pdf:
+                    _class += ' coverpdf'
+
+            if not cover.approved:
+                _class += ' notapproved'
+
+#            if cover.approved:
+#                _class += ' approved'
+
+            covers.append({'cid': cover.cid,
+                           'class': _class, 
+                           'approved': cover.approved,
+                           'title': title})
+
+#    if output_type in ['PDF']:
+#        covers = models.BookCover.objects.filter(book=book, is_pdf=True)
+
+    c = Context({"covers": covers})
     tmpl = django.template.loader.get_template('editor/wizzard_%s.html' % message.get('wizzard_type', 'book')) 
     html = tmpl.render(c)
         
@@ -2898,6 +3256,10 @@ def remote_set_wizzard(request, message, bookid, version):
 
     return {"status": True, "options": {}}
 
+# Two predefined themes
+
+THEME_STYLE1 = '/* DOCUMENT */\n\n@page {\n    size: auto;\n}\n\n\nbody {\n    font-family: "Nimbus Sans L";\n    background-color: white;\n}\n\n\n/* CONTENT */\n\nimg {\n    max-width: 90%;\n    height: auto;\n    image-resolution: from-image;\n}\n\nsup  {\n    font-size: 18pt;\n}\n\np {\n    font-size: 20pt;\n    line-height: 30pt;\n    word-break: break-word;\n    /* text-align: justify; */\n    text-align: left;\n}\n\na {\n    color: #000;\n    text-decoration: none;\n    word-wrap: break-word;\n}\n\nol, ul {\n    font-size: 20pt; \n    text-align: justify;\n}\n\nli {\n    margin-left: 1em;\n    word-wrap: break-word;\n    page-break-inside: avoid;\n    windows: 4;\n    orphans: 4;\n}\n\n/* HEADINGS */\n\nh1 {\n    font-size: 26pt;\n}\n\nh1 .initial {\n    display: none;\n}\n\nh1 .subtitle {\n}\n\nh1 .author {\n    display: block;\n    margin-top: 0.2in;\n    font-weight: normal;\n}\n\nh1 .comma {\n    display: none;\n}\n\nh2 {\n    font-size: 24pt;\n    page-break-after: avoid;\n}\n\nh3 {\n    font-size: 22pt;\n    font-weight: normal;\n    page-break-after: avoid;\n}\n\nh4 {\n    font-size: 22pt;\n    page-break-after: avoid;\n}\n\nh5 {\n    font-size: 22pt;\n    font-weight: normal;\n    text-align: justify;\n    padding-left: .4in;\n    display: block;\n    page-break-after: avoid;\n}\n\n/* CODE BLOCKS */\n\npre {\n    white-space: pre-wrap;       /* css-3 */\n    white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */\n    white-space: -pre-wrap;      /* Opera 4-6 */\n    white-space: -o-pre-wrap;    /* Opera 7 */\n    word-wrap: break-word;       /* Internet Explorer 5.5+ */\n    font-family: courier !important;\n    font-size: 20pt;\n    widows:4;\n    orphans:4;\n}\n\ncode {\n   font-family: courier !important;\n   font-size: 20pt; \n}\n\n\n\n/* TOC */\n\n#pagination-toc-title {\n    font-size: 20pt;\n    font-weight: 700;\n    text-align: left;\n    padding-bottom: .4in;\n}\n\n.pagination-toc-entry {\n/*    width: 6.2in; */\n    width: 90%;\n    display: block;\n    padding-bottom: .3in;\n    font-size: 20pt;\n}\n\n.pagination-toc-entry .pagination-toc-pagenumber {\n    font-weight: 400;\n    display: inline-block;\n    vertical-align: text-bottom;\n    font-size: 20pt;\n    float:right; /* SET AUTOMATICALLY */\n}\n\n.pagination-toc-entry.section {\n    font-weight:700;\n    font-size: 20pt;\n    text-transform: uppercase;\n    padding-bottom: .3in;\n}\n\n\n/* FRONT MATTER */\n\n#booktitle {\n    margin-top: 1.7in;\n    font-size: 28pt;\n    font-weight: normal;\n    text-align: center;\n    text-transform: uppercase;\n}\n\n#booksubtitle {\n    font-size: 24pt;\n    margin-top: 0.2in;\n    font-weight: normal;\n    text-align: center;\n}\n\n#bookeditors {\n    padding-top: 1.5in;\n    font-weight: normal;\n    text-align: center;\n    font-size: 24pt;\n}\n\n#bookpress {\n    padding-top: 1.8in;\n    font-weight: normal;\n    text-align: center;\n    font-size: 20pt;\n}\n\n#copyrightpage {\n    font-weight: normal;\n    font-size: 20pt;\n    padding-top: 0.2in;\n}\n\n\n/* HEADER */\n\n.pagination-header {\n   font-size: 16pt;\n   font-weight: light;\n}\n\n.pagination-pagenumber {\n   font-size: 16pt;\n}\n\n.pagination-header .pagination-section { display: none; }\n\n\n.pagination-toc-text .initial { display: none; }\n.pagination-chapter .initial { display: none; }\n\n\n/* MISC */\n\n.imagecaption {\n    font-size: 9pt;\n    padding-left: 0.2in;\n    line-height: 18px;\n    text-align: justify;\n    font-weight: normal;\n    display: block;\n}\n\n\n.pagebreak {\n    -webkit-region-break-after: always;\n}\n\n.pagebreakbefore {\n    -webkit-region-break-before: always;\n}\n\n.objavi-chapter .initial {\n    display: none;\n}\n\n.objavi-subsection {\n    display: none;\n}\n\n.objavi-subsection-heading {\n    line-height: 120px !important;\n    /* work-around to make section title pages no longer than one page */\n    font-size: 22px;\n    font-weight: bold;\n    text-align: left;\n    display: none;\n}\n\n@media screen {\n    .page {\n        border: solid 1px #000;\n        margin-bottom: .2in;\n    }\n\n    body {\n	background-color: #efefef;\n    }\n}\n\n\n'
+THEME_STYLE2 = '/* DOCUMENT */\n\n@page {\n    size: auto;\n}\n\n\nbody {\n    font-family: "Gentium", "Times New Roman";\n    background-color: white;\n}\n\n\n/* CONTENT */\n\nimg {\n    max-width: 90%;\n    height: auto;\n    image-resolution: from-image;\n}\n\nsup  {\n    font-size: 18pt;\n}\n\np {\n    font-size: 24pt;\n    line-height: 30pt;\n    word-break: break-word;\n    /* text-align: justify; */\n    text-align: left;\n}\n\np + p {\n text-indent: 1em;\n}\n\n\na {\n    color: #000;\n    text-decoration: none;\n    word-wrap: break-word;\n}\n\nol, ul {\n    font-size: 24pt; \n    text-align: justify;\n}\n\nli {\n    margin-left: 1em;\n    word-wrap: break-word;\n    page-break-inside: avoid;\n    windows: 4;\n    orphans: 4;\n}\n\n/* HEADINGS */\n\nh1 {\n    font-size: 32pt;\n    text-align: center;\n    padding-bottom: 50px;\n}\n\nh1 .initial {\n    display: none;\n}\n\nh1 .subtitle {\n}\n\nh1 .author {\n    display: block;\n    margin-top: 0.2in;\n    font-weight: normal;\n}\n\nh1 .comma {\n    display: none;\n}\n\nh2 {\n    font-size: 26pt;\n    page-break-after: avoid;\n}\n\nh3 {\n    font-size: 24pt;\n    font-weight: normal;\n    page-break-after: avoid;\n}\n\nh4 {\n    font-size: 24pt;\n    page-break-after: avoid;\n}\n\nh5 {\n    font-size: 24pt;\n    font-weight: normal;\n    text-align: justify;\n    line-height: 18px;\n    padding-left: .4in;\n    display: block;\n    page-break-after: avoid;\n}\n\n/* CODE BLOCKS */\n\npre {\n    white-space: pre-wrap;       /* css-3 */\n    white-space: -moz-pre-wrap;  /* Mozilla, since 1999 */\n    white-space: -pre-wrap;      /* Opera 4-6 */\n    white-space: -o-pre-wrap;    /* Opera 7 */\n    word-wrap: break-word;       /* Internet Explorer 5.5+ */\n    font-family: courier !important;\n    font-size: 22pt;\n    widows:4;\n    orphans:4;\n}\n\ncode {\n   font-family: courier !important;\n   font-size: 24pt; \n}\n\n\n\n/* TOC */\n\n#pagination-toc-title {\n    font-size: 24pt;\n    font-weight: 700;\n    text-align: left;\n    padding-bottom: .4in;\n}\n\n.pagination-toc-entry {\n/*    width: 6.2in; */\n    width: 90%;\n    display: block;\n    padding-bottom: .3in;\n    font-size: 24pt;\n}\n\n.pagination-toc-entry .pagination-toc-pagenumber {\n    font-weight: 400;\n    display: inline-block;\n    vertical-align: text-bottom;\n    font-size: 24pt;\n    float:right; /* SET AUTOMATICALLY */\n}\n\n.pagination-toc-entry.section {\n    font-weight:700;\n    font-size: 24pt;\n    text-transform: uppercase;\n    padding-bottom: .3in;\n}\n\n\n/* FRONT MATTER */\n\n#booktitle {\n    margin-top: 1.7in;\n    font-size: 32pt;\n    font-weight: normal;\n    text-align: center;\n}\n\n#booksubtitle {\n    font-size: 22px;\n    margin-top: 0.2in;\n    font-weight: normal;\n    text-align: center;\n}\n\n#bookeditors {\n    padding-top: 1.5in;\n    font-weight: normal;\n    text-align: center;\n    font-size: 24pt;\n}\n\n#bookpress {\n    padding-top: 1.8in;\n    font-weight: normal;\n    text-align: center;\n    font-size: 24pt;\n}\n\n#copyrightpage {\n    font-weight: normal;\n    font-size: 24pt;\n    padding-top: 0.2in;\n}\n\n\n/* HEADER */\n\n.pagination-header {\n   font-size: 18pt;\n   font-weight: light;\n}\n\n.pagination-pagenumber {\n   font-size: 18pt;\n   color: black;\n}\n\n.pagination-header .pagination-section { display: none; }\n.pagination-header .pagination-chapter { color: white; }\n\n\n.pagination-toc-text .initial { display: none; }\n.pagination-chapter .initial { display: none; }\n\n\n/* MISC */\n\n.imagecaption {\n    font-size: 9pt;\n    padding-left: 0.2in;\n    line-height: 18px;\n    text-align: justify;\n    font-weight: normal;\n    display: block;\n}\n\n\n.pagebreak {\n    -webkit-region-break-after: always;\n}\n\n.pagebreakbefore {\n    -webkit-region-break-before: always;\n}\n\n.objavi-chapter .initial {\n    display: none;\n}\n\n.objavi-subsection {\n    display: none;\n}\n\n.objavi-subsection-heading {\n    line-height: 120px !important;\n    /* work-around to make section title pages no longer than one page */\n    font-size: 22px;\n    font-weight: bold;\n    text-align: left;\n    display: none;\n}\n\n@media screen {\n    .page {\n        border: solid 1px #000;\n        margin-bottom: .2in;\n    }\n\n    body {\n	background-color: #efefef;\n    }\n}\n\n\n'
 
 def remote_publish_book2(request, message, bookid, version):
     """
@@ -2908,11 +3270,6 @@ def remote_publish_book2(request, message, bookid, version):
     Input:
      - publish_mode
      - is_archive
-     - is_lulu
-     - lulu_user
-     - lulu_password
-     - lulu_api_key
-     - lulu_project
      - book
      - project
      - mode
@@ -2978,25 +3335,29 @@ def remote_publish_book2(request, message, bookid, version):
 
     options = []
 
+
+    # so we can steel book options even when we are bookjs/pdf
+    pm = message.get("publish_mode", "epub")
+
     try:
         pw = models.PublishWizzard.objects.get(book=book,
                                                user=request.user,
-                                               wizz_type= message.get("publish_mode", "epub")
+                                               wizz_type=pm
                                                )
         try:
             options = simplejson.loads(pw.wizz_options)
         except:
-            options = PUBLISH_OPTIONS[message.get('wizzard_type', 'book')]
+            options = PUBLISH_OPTIONS[pm]
 
     except models.PublishWizzard.DoesNotExist:
-        options = PUBLISH_OPTIONS[message.get('wizzard_type', 'book')]
+        options = PUBLISH_OPTIONS[pm]
 
     # converstion for names
     publishOptions = {'ebook': 'epub',
                       'book': 'book',
+                      'bookjs': 'bookjs/pdf',
                       'odt': 'openoffice',
                       'newpaper': 'pdf',
-                      'lulu': 'book',
                       'pdf': 'web'}
 
     # At one point Booktype and Objavi did not have same list of licenses.
@@ -3050,6 +3411,55 @@ def remote_publish_book2(request, message, bookid, version):
 
         return None
 
+    def _getCover():
+        cover = None
+        cid = _getValue('cover_image')
+
+        if type(cid) == type([]):
+            return cover
+
+        if cid and cid.strip() != '':
+            try:
+                cover = models.BookCover.objects.get(book=book, cid=cid)
+            except models.BookCover.DoesNotExist:
+                pass
+
+        return cover
+
+    def _getCoverList():
+        cid = _getValue('cover_image')
+        clist = []
+        cres = []
+
+        if type(cid) != type([]):
+            clist = [cid]
+        else:
+            clist = cid
+
+        for c in clist:
+            try:
+                cvr = models.BookCover.objects.get(book=book, cid=c)
+                cres.append(cvr)
+            except models.BookCover.DoesNotExist:
+                pass
+
+        return cres
+
+
+    def _getCoverSize(c):
+        try:
+            import Image
+
+            im = Image.open(c.attachment.name)
+            size = im.size
+            return '#%s,%s' % size
+        except:
+            # In case of any kind of error
+            return ''
+
+    cover = _getCover()
+    coverList = _getCoverList()
+
     # todo
     # - title
     # - licence        
@@ -3071,7 +3481,7 @@ def remote_publish_book2(request, message, bookid, version):
         return s
  
 
-    if publishMode == 'book' and message.get("publish_mode", "") != 'lulu':
+    if publishMode in ['book']:
         _isSet('booksize')
         _isSet('custom_width')
         _isSet('custom_height')
@@ -3115,50 +3525,58 @@ def remote_publish_book2(request, message, bookid, version):
             args['page_width']  = args.get('custom_width', '')
             args['page_height'] = args.get('custom_height', '')
 
-    if publishMode == 'book' and message.get("publish_mode", "") == 'lulu':
-        args['to_lulu'] = 'yes' 
-        args['lulu_user'] = message.get('lulu_user', '')
-        args['lulu_password'] = message.get('lulu_password', '')
+    if publishMode in ['bookjs/pdf']:
+        theme = message.get('theme', 'style3')
 
-        _isSet('lulu_title')
-        _isSet('description')
-        _isSet('authors')
-        _isSet('lulu_download_price')
-        _isSet('lulu_print_price')
-        _isSet('lulu_currency_code')
-        _isSet('pagesize')
+        _isSet('booksize')
+        _isSet('custom_width')
+        _isSet('custom_height')
 
+        _isSet('top_margin')
+        _isSet('side_margin')
+        _isSet('bottom_margin')
+        _isSet('gutter')
+
+        # in this case, just the css you entered
         if _getValue('custom_override') == 'on':
-            _css = config.getConfiguration('BOOKTYPE_CSS_LULU', '')
+            _css = config.getConfiguration('BOOKTYPE_CSS_BOOKJS', '')
 
             _css += _getValue('additional_css') or ''
         else:
-            _css = config.getConfiguration('BOOKTYPE_CSS_LULU', '')
+            _css = config.getConfiguration('BOOKTYPE_CSS_BOOKJS', '')
 
-            _css += _formatCSS("BODY, P", _getValue('body_font-family'), _getValue('body_font-size'))
-            _css += _formatCSS("H1", _getValue('h1_font-family'), _getValue('h1_font-size'), _getValue('h1_text-transform'), _getValue('h1_font-weight'))
-            _css += _formatCSS("H2", _getValue('h2_font-family'), _getValue('h2_font-size'), _getValue('h2_text-transform'), _getValue('h2_font-weight'))
-            _css += _formatCSS("H3", _getValue('h3_font-family'), _getValue('h3_font-size'), _getValue('h3_text-transform'), _getValue('h3_font-weight'))
-            _css += _formatCSS("PRE", _getValue('pre_font-family'), _getValue('pre_font-size'))
-            _css += _getValue('additional_css') or ''
+            if theme == 'style3':
+                _css += _formatCSS("BODY, P", _getValue('body_font-family'), _getValue('body_font-size'))
+                _css += _formatCSS("H1", _getValue('h1_font-family'), _getValue('h1_font-size'), _getValue('h1_text-transform'), _getValue('h1_font-weight'))
+                _css += _formatCSS("H2", _getValue('h2_font-family'), _getValue('h2_font-size'), _getValue('h2_text-transform'), _getValue('h2_font-weight'))
+                _css += _formatCSS("H3", _getValue('h3_font-family'), _getValue('h3_font-size'), _getValue('h3_text-transform'), _getValue('h3_font-weight'))
+                _css += _formatCSS("PRE", _getValue('pre_font-family'), _getValue('pre_font-size'))
+                _css += _getValue('additional_css') or ''
 
-        args['css'] = _css
-        
-        _isSet('p_pagebreak')
-        _isSet('footnotes_pagebreak')
+        if theme == 'style3' and _getValue('control-css') == 'on':
+            args['css'] = _css
 
-        # We have been using wrong argument name for this. Considering people have saved in their publishing settings old values this 
+        if theme == 'style1':
+            args['css'] = THEME_STYLE1
+
+        if theme == 'style2':
+            args['css'] = THEME_STYLE2
+
+        # We have been using wrong argument name for this. Considering people have saved in their publishing settings old values this
         # seems to be best way to fix this issue for now.
 
         if args.get('booksize', '') == 'custom':
             args['page_width']  = args.get('custom_width', '')
             args['page_height'] = args.get('custom_height', '')
-        
 
     if publishMode == 'epub':
         # ebook_format ipad,kindle,epub
 
         ebookFormat = _getValue('ebook_format')
+
+        if cover:
+            _extra = _getCoverSize(cover)
+            args['cover_url'] = settings.BOOKI_URL+'/%s/_cover/%s/%s%s' % (book.url_title, cover.cid, urllib.quote(cover.filename), _extra)
 
         if ebookFormat == 'kindle':
             args['output_profile'] = 'kindle'
@@ -3227,6 +3645,24 @@ def remote_publish_book2(request, message, bookid, version):
             args['page_width']  = args.get('custom_width', '')
             args['page_height'] = args.get('custom_height', '')
 
+        if cover:
+            _extra = _getCoverSize(cover)
+            args['cover_url'] = settings.BOOKI_URL+'/%s/_cover/%s/%s%s' % (book.url_title, cover.cid, urllib.quote(cover.filename), _extra)
+
+
+    if publishMode in ['openoffice']:
+        if cover:
+            _extra = _getCoverSize(cover)
+            args['cover_url'] = settings.BOOKI_URL+'/%s/_cover/%s/%s%s' % (book.url_title, cover.cid, urllib.quote(cover.filename), _extra)
+        
+    for key in args.keys():
+        if isinstance(args[key], basestring):
+            # Ignore any kind of error. There will be no time to test this fully so just ignore everything for now
+            try:
+                args[key] = unicode(args[key]).encode('utf8')
+            except:
+                pass
+
     try:
         data = urllib.urlencode(args)
     except UnicodeEncodeError:
@@ -3253,4 +3689,12 @@ def remote_publish_book2(request, message, bookid, version):
         if len(lst) > 1:
             dtas3 = lst[1]
 
-    return {"status": True, "dtaall": ta, "dta": dta, "dtas3": dtas3}
+    # out of all this, only 
+    result = {"status": True, "dtaall": ta, "dta": dta, "dtas3": dtas3}
+    
+    if len(coverList) > 0:
+        r = [(c.cover_type, settings.BOOKI_URL+'/%s/_cover/%s/' % (book.url_title, c.cid), c.cid, c.title, c.filename) for c in coverList]
+                
+        result['covers'] = r
+
+    return result

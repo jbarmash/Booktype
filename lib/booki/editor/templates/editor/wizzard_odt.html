@@ -91,9 +91,57 @@
           </fieldset>
         </div>
       </div>
+
+      <div id="Cover_Advanced" class="step">
+	<div class="input bottomSpace">
+          <fieldset>
+	    <legend>{% trans "Cover" %}</legend>
+            <dl>
+              <dt><label for="cover_image">{% trans "Select cover image" %}</label></dt>
+	      <dd><select name="cover_image" id="cover_image">
+		  <option value="">{% trans "No Cover" %}</option>
+		  <option disabled="disabled" role="separator">-------------------</option>
+                  {% for cover in covers %}
+                  <option value="{{ cover.cid }}" class="{{ cover.class }}">{{ cover.title }}</option>
+                  {% endfor %}
+              </select></dd>
+            </dl> 
+            <p style="max-width: 450px;">{% trans "Tip: Only images of the following filetypes can be used to publish an ebook: PNG, JPEG, GIF." %}</p>
+          </fieldset>       
+        <script>
+          $(function() {
+	     $("SELECT#cover_image OPTION").each(function(i, a) {
+	        var v = $(a);
+
+	        if(v.hasClass("coverbook")) {
+	           v.html(v.html()+" ("+$.booki._('cover_book', 'BOOK')+")");
+	        }
+
+	        if(v.hasClass("coverebook")) {
+	           v.html(v.html()+" ("+$.booki._('cover_ebook', 'E-BOOK')+")");
+	        }
+
+	        if(v.hasClass("coverpdf")) {
+	           v.html(v.html()+" ("+$.booki._('cover_pdf', 'PDF')+")");
+	        }
+
+	        if(v.hasClass("notapproved")) {
+	           v.html(v.html()+" ("+$.booki._('cover_notapproved', 'Pending').toUpperCase()+")");
+	        }
+
+	        if(v.hasClass("approved")) {
+	           v.html(v.html()+" ("+$.booki._('cover_approved', 'APPROVED').toUpperCase()+")");
+	        }
+	     });
+
+	  });
+        </script>
+
+	</div>
+      </div>
       
       <div id="paragraphs" class="step">
-        <div class="input">
+        <div class="input bottomSpace">
           <fieldset>
           <legend>{% trans "Page breaks" %}</legend>
               <dl>

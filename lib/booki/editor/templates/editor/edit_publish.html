@@ -18,13 +18,6 @@
     </tr>
     {% endif %}
 
-    {% if "lulu" in publish_options %}
-    <tr>
-      <td><label><input type="radio" name="publish" group="publishtype" value="lulu">{% trans "Lulu.com" %}</label></td>
-      <td><a name="luluwizzard" onclick="return false">{% trans "settings" %}</a></td>
-    </tr>
-    {% endif %}
-
     {% if "pdf" in publish_options %}
     <tr>
       <td><label><input type="radio" name="publish" group="publishtype" value="pdf">{% trans "Screen PDF" %}</label></td>
@@ -39,6 +32,28 @@
     </tr>
     {% endif %}
 
+    {% if "bookjs" in publish_options %}
+    <tr>
+     <td colspan="2"> <div style="padding-top: 5px; padding-bottom: 5px; border: 1px solid white;"><div style="height: 1px; border-top: 1px solid #a0a0a0"></div></div> </td>
+    </tr>
+
+    <tr>
+      <td><label><input type="radio" name="publish" group="publishtype" value="bookjs">{% trans "Try out our new beta renderer for Books" %}</label></td>
+      <td><a name="bookjswizzard" onclick="return false">{% trans "settings" %}</a></td>
+    </tr>
+    <tr>
+     <td>
+       <div style="margin-left: 20px;" class="styleoptions">
+          <input type="radio" name="style" group="style" value="style1">Modern style
+          <input type="radio" name="style" group="style" value="style2">Old style
+          <input type="radio" name="style" group="style" value="style3" checked="checked">Custom
+       </div>
+     </td>
+     <td></td>
+    </tr>
+    {% endif %}
+
+
   </table>
 </form>
 <br/>
@@ -49,6 +64,7 @@
 </div>
 <div class="downloadpublish template">
   <div style="padding: 10px"> {% trans "Your book has been generated at this url:" %} <span class="url"></span> </div>
+  <div style="padding: 10px; display: none;" class="covers">Covers used with this book: <span class="lst"></span>.</div>
 </div>
 <div class="publisherror template">
   <div class="alert-box error" style="padding: 10px"> {% trans "Unknown error while trying to publish this book." %} </div>

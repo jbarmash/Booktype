@@ -444,8 +444,17 @@ def view_profile(request, username):
             
         return resp
 
+    notification_filter = ''
+
     if request.user.username == username:
         books = models.Book.objects.filter(owner=user)
+        endpoint = get_endpoint_or_none("@"+user.username)
+
+        if endpoint:
+            endpoint_config = endpoint.get_config()
+
+            if endpoint_config:
+                notification_filter = endpoint_config.notification_filter
     else:
         if request.user.is_authenticated() and request.user.is_superuser:
             books = models.Book.objects.filter(owner=user)
@@ -472,6 +481,7 @@ def view_profile(request, username):
                                                                 "user_description": '<br/>'.join(userDescription.replace('\r','').split('\n')),
                                                                 "books": books,
                                                                 "limit_reached": isBookLimitReached(),
+                                                                "notification_filter": notification_filter,
                                                                 "groups": groups})
     except:
         transaction.rollback()
@@ -556,7 +566,7 @@ def view_profilethumbnail(request, profileid):
         u = User.objects.get(username=profileid)
     except User.DoesNotExist:
         try:
-            resp = pages.ErrorPage(request, "errors/user_does_not_exist.html", {"username": username})
+            resp = pages.ErrorPage(request, "errors/user_does_not_exist.html", {"username": profileid})
         except:
             transaction.rollback()
             raise
@@ -573,7 +583,7 @@ def view_profilethumbnail(request, profileid):
         try:
             name = '%s/images/%s' % (settings.STATIC_ROOT, settings.DEFAULT_PROFILE_IMAGE)
         except AttributeError:
-            name = '%s%s' % (settings.SITE_STATIC_ROOT, '/images/anonymous.jpg')
+            name = '%s%s' % (settings.SITE_STATIC_ROOT, '/images/anonymous.png')
 
         return name
 
